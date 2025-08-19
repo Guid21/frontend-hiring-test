@@ -1,20 +1,36 @@
-import React from "react";
+import React, { useCallback, useMemo } from "react";
 import { ItemContent, Virtuoso } from "react-virtuoso";
 import cn from "clsx";
 import {
   MessageSender,
-  MessageStatus,
   type Message,
+  type Query,
 } from "../__generated__/resolvers-types";
 import css from "./chat.module.css";
+import { gql, useQuery } from "@apollo/client";
 
-const temp_data: Message[] = Array.from(Array(30), (_, index) => ({
-  id: String(index),
-  text: `Message number ${index}`,
-  status: MessageStatus.Read,
-  updatedAt: new Date().toISOString(),
-  sender: index % 2 ? MessageSender.Admin : MessageSender.Customer,
-}));
+const MESSAGES_QUERY = gql`
+  query Messages($first: Int, $after: MessagesCursor) {
+    messages(first: $first, after: $after) {
+      edges {
+        node {
+          id
+          text
+          status
+          updatedAt
+          sender
+        }
+        cursor
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+    }
+  }
+`;
+
+const PAGE_SIZE = 10;
 
 const Item: React.FC<Message> = ({ text, sender }) => {
   return (
@@ -36,10 +52,49 @@ const getItem: ItemContent<Message, unknown> = (_, data) => {
 };
 
 export const Chat: React.FC = () => {
+  const { data, fetchMore } = useQuery<Query>(MESSAGES_QUERY, {
+    variables: { first: PAGE_SIZE},
+    notifyOnNetworkStatusChange: true,
+  });
+
+  const messages = useMemo(() =>
+    data?.messages?.edges?.map((edge) => edge.node) ?? [],
+    [data]
+  );
+
+  const endCursor = data?.messages?.pageInfo?.endCursor;
+  const hasNextPage = data?.messages?.pageInfo?.hasNextPage;
+
+  const loadMore = useCallback(() => {
+    if (hasNextPage && endCursor) {
+      fetchMore({
+        variables: { first: PAGE_SIZE, after: endCursor },
+        updateQuery: (prevResult, { fetchMoreResult }) => {
+          if (!fetchMoreResult) return prevResult;
+          return {
+            messages: {
+              ...fetchMoreResult.messages,
+              edges: [
+                ...prevResult.messages.edges,
+                ...fetchMoreResult.messages.edges,
+              ],
+            },
+          };
+        },
+      });
+    }
+  }, [fetchMore, hasNextPage, endCursor]);
+
   return (
     <div className={css.root}>
       <div className={css.container}>
-        <Virtuoso className={css.list} data={temp_data} itemContent={getItem} />
+        <Virtuoso
+          className={css.list}
+          data={messages}
+          itemContent={getItem}
+          endReached={loadMore}
+          overscan={200}
+        />
       </div>
       <div className={css.footer}>
         <input
