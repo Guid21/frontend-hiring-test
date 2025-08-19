@@ -31,14 +31,13 @@ const link = split(
 const cache = new InMemoryCache({
   typePolicies: {
     Message: {
-      keyFields: ['id', 'sender']
+      keyFields: ['id', 'sender'],
     },
     Query: {
       fields: {
         messages: relayStylePagination(),
       }
-    }
-
+    },
   }
 });
 

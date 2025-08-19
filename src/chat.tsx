@@ -6,14 +6,13 @@ import {
   type Message,
 } from "../__generated__/resolvers-types";
 import css from "./chat.module.css";
-import { useQueryMessages, useSubscriptionMessages, useSendMessage } from "./hooks/useChatMessages";
+import { useQueryMessages, useSendMessage } from "./hooks/useChatMessages";
 
 
 export const Chat: React.FC = () => {
   const [input, setInput] = useState("");
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const { messages, loadMore, error } = useQueryMessages();
-  useSubscriptionMessages();
   const { sendMessage } = useSendMessage();
 
   const handleMessage = useCallback(() => {
