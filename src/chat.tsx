@@ -53,7 +53,7 @@ export const Chat: React.FC = () => {
   );
 };
 
-const Item: React.FC<Message> = ({ text, sender }) => (
+const Item: React.FC<Message> = ({ text, sender, status }) => (
   <div className={css.item}>
     <div
       className={cn(
@@ -61,7 +61,7 @@ const Item: React.FC<Message> = ({ text, sender }) => (
         sender === MessageSender.Admin ? css.out : css.in
       )}
     >
-      {text}
+      {text} {status}
     </div>
   </div>
 );

@@ -4,6 +4,8 @@ import {
   Subscription,
   type Query,
   type Mutation,
+  type MessageEdge,
+  type Message,
 } from "../../__generated__/resolvers-types";
 import {
   MESSAGE_ADDED_SUBSCRIPTION,
@@ -13,6 +15,8 @@ import {
 } from "../../src/graphql/messages";
 
 const PAGE_SIZE = 10;
+
+const getCursor = (message: Message) => `client:${message.sender}:${message.id}`;
 
 export function useQueryMessages() {
   const { data, error, fetchMore, loading: isLoading, subscribeToMore } = useQuery<Query>(MESSAGES_QUERY, {
@@ -41,22 +45,30 @@ export function useQueryMessages() {
     const unsubAdded = subscribeToMore<Subscription, Query>({
       document: MESSAGE_ADDED_SUBSCRIPTION,
       updateQuery: (prev, { subscriptionData }) => {
-        const newMessage = subscriptionData.data?.messageAdded;
-        if (!newMessage) return prev;
-        const cursor = `client:${newMessage.sender}:${newMessage.id}:${newMessage.updatedAt}`;
-        const isOldMessage = prev.messages.edges.some(edge => edge.node.id === newMessage.id && edge.node.sender === newMessage.sender);
+        const messageAdded = subscriptionData.data?.messageAdded;
+        if (!messageAdded) return prev;
+        const alreadyExists = prev.messages.edges.some((edge) => edge.node.id === messageAdded.id && edge.node.sender === messageAdded.sender);
 
-        return { 
-          ...prev, 
-          messages: { 
-            ...prev.messages, 
-            edges: isOldMessage ? prev.messages.edges : [...prev.messages.edges, {
-              __typename: "MessageEdge",
-              node: newMessage,
-              cursor
-            }], 
-            pageInfo: prev.messages.pageInfo 
-          } 
+        if (alreadyExists) {
+          return prev;
+        }
+        const cursor = getCursor(messageAdded);
+        const newEdge = {
+          __typename: "MessageEdge" as const,
+          cursor: cursor,
+          node: messageAdded
+        };
+
+        return {
+          ...prev,
+          messages: {
+            ...prev.messages,
+            edges: [...prev.messages.edges, newEdge],
+            pageInfo: {
+              ...prev.messages.pageInfo,
+              hasNextPage: false,
+            },
+          },
         };
       },
     })
@@ -64,30 +76,26 @@ export function useQueryMessages() {
     const unsubUpdated = subscribeToMore<Subscription>({
       document: MESSAGE_UPDATED_SUBSCRIPTION,
       updateQuery: (prev, { subscriptionData }) => {
-        const newMessage = subscriptionData.data?.messageUpdated;
-        if (!newMessage) return prev;
-        return { 
-          ...prev, 
-          messages: { 
-            ...prev.messages, 
-            edges: prev.messages.edges.map(edge => {
-              const isNewMessage = edge.node.id === newMessage.id;
-              const isOlder = new Date(edge.node.updatedAt).getTime() <= new Date(newMessage.updatedAt).getTime();
-              if (isNewMessage && !isOlder) {
-                return ({
-                  ...edge,
-                  __typename: "MessageEdge",
-                  node: newMessage
-                })
-              }
-              
-              return ({
-                ...edge,
-                __typename: "MessageEdge"
-              })
-            }), 
-            pageInfo: prev.messages.pageInfo 
-          } 
+        const messageUpdated = subscriptionData.data?.messageUpdated;
+        if (!messageUpdated) return prev;
+        const updatedEdges = prev.messages.edges.map((edge) => {
+          if (edge.node.id === messageUpdated.id && edge.node.sender === messageUpdated.sender) {
+            const existingUpdatedAt = edge.node.updatedAt;
+            const incomingUpdatedAt = messageUpdated.updatedAt;
+
+            if (new Date(incomingUpdatedAt).getTime() >= new Date(existingUpdatedAt).getTime()) {
+              return { ...edge, node: { ...edge.node, ...messageUpdated } };
+            }
+          }
+          return edge;
+        });
+        return {
+          ...prev,
+          messages: {
+            ...prev.messages,
+            edges: updatedEdges,
+            pageInfo: prev.messages.pageInfo
+          }
         };
       },
     })
@@ -115,6 +123,47 @@ export function useSendMessage() {
       if (text.trim()) {
         await sendMessage({
           variables: { text },
+          update: (cache, { data }) => {
+            const newMessage = data?.sendMessage;
+            if (!newMessage) return;
+            const cursor = getCursor(newMessage);
+            const existing = cache.readQuery<Query>({
+              query: MESSAGES_QUERY,
+              variables: { first: PAGE_SIZE },
+            });
+            const existingEdge = existing?.messages.edges.find(edge => edge.node.id === newMessage.id && edge.node.sender === newMessage.sender);
+
+            const isSkip = existingEdge && new Date(existingEdge?.node.updatedAt ?? 0).getTime() <= new Date(newMessage.updatedAt).getTime();
+
+            if (isSkip) {
+              return;
+            }
+
+            cache.modify({
+              fields: {
+                messages(existingConn = {},) {
+                  const { edges = [] }: { edges: MessageEdge[] } = existingConn;
+                  return {
+                    ...existingConn,
+                    edges: existingEdge ? edges.map(edge => {
+                      if (edge.node.id === newMessage.id && edge.node.sender === newMessage.sender) {
+                        return {
+                          ...edge,
+                          __typename: "MessageEdge",
+                          node: newMessage,
+                        }
+                      }
+                      return edge;
+                    }) : [...edges, {
+                      __typename: "MessageEdge",
+                      node: newMessage,
+                      cursor,
+                    }]
+                  };
+                }
+              }
+            });
+          },
           fetchPolicy: 'no-cache',
         });
       }
